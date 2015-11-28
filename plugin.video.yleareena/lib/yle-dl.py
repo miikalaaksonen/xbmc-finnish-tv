@@ -11,6 +11,19 @@ This script downloads video and audio streams from Yle Areena
 (http://yle.fi/aihe/elava-arkisto).
 """
 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 import sys
 import urllib
 import urllib2
@@ -23,7 +36,6 @@ import signal
 import urlparse
 import htmlentitydefs
 import json
-import string
 import xml.dom.minidom
 import time
 import codecs
@@ -31,10 +43,9 @@ import base64
 import ctypes
 import ctypes.util
 import itertools
-from operator import itemgetter
 from Crypto.Cipher import AES
 
-version = '2.7.0'
+version = '2.9.0'
 
 AREENA_NG_SWF = 'http://areena.yle.fi/static/player/1.2.8/flowplayer/flowplayer.commercial-3.2.7-encrypted.swf'
 AREENA_NG_HTTP_HEADERS = {'User-Agent': 'yle-dl/' + version.split(' ')[0]}
@@ -78,7 +89,7 @@ def log(msg):
 
 def splashscreen():
     log(u'yle-dl %s: Download media files from Yle Areena and Elävä Arkisto' % version)
-    log(u'Copyright (C) 2009-2015 Antti Ajanki <antti.ajanki@iki.fi>, license: GPLv2')
+    log(u'Copyright (C) 2009-2015 Antti Ajanki <antti.ajanki@iki.fi>, license: GPLv3')
 
 def usage():
     """Print the usage message to stderr"""
@@ -109,6 +120,7 @@ def usage():
     log(u'                          rtmp - rtmpdump')
     log(u'--pipe                  Dump stream to stdout for piping to media player')
     log(u'                        E.g. "yle-dl --pipe URL | vlc -"')
+    log(u'-V, --verbose           Show verbose debug output')
 
 def download_page(url):
     """Returns contents of a HTML page at url."""
@@ -181,7 +193,9 @@ def int_or_else(x, default):
         return default
 
 def downloader_factory(url, protocols):
-    if url.startswith('http://yle.fi/aihe/'):
+    if url.startswith('http://yle.fi/aihe/') or \
+            url.startswith('http://areena.yle.fi/26-') or \
+            url.startswith('http://arenan.yle.fi/26-'):
         return RetryingDownloader(ElavaArkistoDownloader, protocols)
     elif url.startswith('http://svenska.yle.fi/artikel/'):
         return RetryingDownloader(ArkivetDownloader, protocols)
@@ -195,6 +209,9 @@ def downloader_factory(url, protocols):
         return RetryingDownloader(AreenaNGDownloader, protocols)
     elif url.startswith('http://areena.yle.fi/tv/suorat/'):
         return RetryingDownloader(Areena2014LiveTVDownloader, protocols)
+    elif url.startswith('http://yle.fi/uutiset/') or \
+            url.startswith('http://yle.fi/urheilu/'):
+        return RetryingDownloader(YleUutisetDownloader, protocols)
     elif url.startswith('http://areena.yle.fi/') or \
             url.startswith('http://arenan.yle.fi/') or \
             url.startswith('http://yle.fi/'):
@@ -271,7 +288,7 @@ def parse_rtmp_single_component_app(rtmpurl):
     return (app_only_rtmpurl, playpath, ext)
 
 
-class StreamFilters:
+class StreamFilters(object):
     """Parameters for deciding which of potentially multiple available stream
     versions to download.
     """
@@ -287,7 +304,7 @@ class StreamFilters:
 
 # Areena
 
-class AreenaUtils:
+class AreenaUtils(object):
     def areena_decrypt(self, data, aes_key):
         try:
             bytestring = base64.b64decode(str(data))
@@ -357,7 +374,7 @@ class AreenaNGDownloader(AreenaUtils):
     @staticmethod
     def supported_protocols():
         return ['hds', 'rtmp']
-    
+
     def __init__(self, streaming_protocol):
         if streaming_protocol.split(':', 1)[0] == 'hds':
             self.stream_class_factory = \
@@ -400,15 +417,15 @@ class AreenaNGDownloader(AreenaUtils):
         overall_status = RD_SUCCESS
         for clip in playlist:
 
-            # Areena's "all episodes" page does not include subtitle information, only 
-            # the single episode pages do. So read the episode numbers from the "all 
+            # Areena's "all episodes" page does not include subtitle information, only
+            # the single episode pages do. So read the episode numbers from the "all
             # episodes" page and then download the episodes individually.
             if (clip.has_key('id') and not clip['id'] in url and
                 not clip.has_key('subtitles') and optype == self.OP_DOWNLOAD and
                 clip['type'] == 'video'):
                 url = "http://areena.yle.fi/tv/" + clip['id']
                 print url
-                
+
                 res = self.download_episodes(url, filters, rtmpdumpargs, destdir)
             else:
                 res = self.process_single_episode(clip, url, filters,
@@ -514,11 +531,11 @@ class AreenaNGDownloader(AreenaUtils):
         jsonstr = download_page(url)
         if not jsonstr:
             return None
-        
+
         if debug:
             log(url)
             log(jsonstr)
-        
+
         try:
             metadata = json.loads(jsonstr)
         except ValueError:
@@ -550,13 +567,13 @@ class AreenaStreamBase(AreenaUtils):
 
     def is_valid(self):
         return not self.error
-    
+
     def get_error_message(self):
         if self.is_valid():
             return None
         else:
             return self.error or 'Stream not valid'
-    
+
     def to_url(self):
         return ''
 
@@ -720,7 +737,7 @@ class AreenaRTMPStreamUrl(AreenaStreamBase):
     def stream_to_rtmp_parameters(self, stream, pageurl, islive):
         if not stream:
             return None
-        
+
         rtmp_connect = stream.connect
         rtmp_stream = stream.stream
         if not rtmp_stream:
@@ -774,7 +791,7 @@ class AreenaRTMPStreamUrl(AreenaStreamBase):
             rtmpparams['live'] = '1'
 
         return rtmpparams
-    
+
     def rtmpurlparse(self, url):
         if '://' not in url:
             raise ValueError("Invalid RTMP URL")
@@ -899,10 +916,8 @@ class AreenaHDSStreamUrl(AreenaStreamBase):
 
     def _parse_hds_url(self, media, pageurl, filters):
         if media.get('live', False):
-            islive = True
             papiurl = 'http://papi.yle.fi/ng/live/hds/' + media['id'] + '/fin'
         else:
-            islive = False
             papiurl = 'http://papi.yle.fi/ng/mod/hds/' + media['id']
 
         stream = self.stream_from_papi(papiurl, self.HDS_AES_KEY, filters)
@@ -924,16 +939,16 @@ class Areena2014HDSStreamUrl(AreenaHDSStreamUrl):
         else:
             self.hds_url = None
         self.error = None
-    
+
     def is_valid(self):
         return not self.error
-    
+
     def get_error_message(self):
         if self.is_valid():
             return None
         else:
             return self.error or 'Stream not valid'
-    
+
     def to_url(self):
         return self.hds_url
 
@@ -954,7 +969,7 @@ class Areena2014RTMPStreamUrl(AreenaRTMPStreamUrl):
         return PAPIStream(streamurl, playpath, 0, 0, False)
 
 
-class HTTPStreamUrl:
+class HTTPStreamUrl(object):
     def __init__(self, url):
         self.url = url
         path = urlparse.urlparse(url)[2]
@@ -973,7 +988,7 @@ class HTTPStreamUrl:
         return HTTPDump(self, clip_title, destdir, extra_argv)
 
 
-class InvalidStreamUrl:
+class InvalidStreamUrl(object):
     def __init__(self, error_message):
         self.error = error_message
 
@@ -983,8 +998,11 @@ class InvalidStreamUrl:
     def get_error_message(self):
         return self.error
 
+    def to_url(self):
+        return ''
 
-class PAPIStream:
+
+class PAPIStream(object):
     def __init__(self, connect, stream, videoBitrate, audioBitrate, hardSubtitles):
         self.connect = connect
         self.stream = stream
@@ -1017,7 +1035,7 @@ class Areena2014Downloader(AreenaUtils):
 
     def __init__(self, streaming_protocol):
         self.backend = streaming_protocol
-    
+
     def download_episodes(self, url, filters, extra_argv, destdir):
         def download_clip(clip):
             downloader = clip.streamurl.create_downloader(clip.title, destdir,
@@ -1042,7 +1060,7 @@ class Areena2014Downloader(AreenaUtils):
                 print_url = clip.streamurl.to_url()
             print print_url.encode(enc, 'replace')
             return RD_SUCCESS
-        
+
         return self.process(print_clip_url, url, filters)
 
     def pipe(self, url, filters):
@@ -1057,7 +1075,7 @@ class Areena2014Downloader(AreenaUtils):
             enc = sys.getfilesystemencoding()
             print clip.title.encode(enc, 'replace')
             return RD_SUCCESS
-        
+
         return self.process(print_clip_title, url, filters)
 
     def process(self, clipfunc, url, filters):
@@ -1071,17 +1089,18 @@ class Areena2014Downloader(AreenaUtils):
 
     def get_playlist(self, url, filters):
         """If url is a series page, return a list of included episode pages."""
-        maybe_series_id = self.program_id_from_url(url)
-        path = '/api/programs/v1/items.json?' \
-               'series=%s&type=program&availability=ondemand&' \
-               'order=ondemand.publication.starttime%%253Adesc&' \
-               'app_id=cb021459&app_key=fa6c26b3b3e617b7033c83c108417200&' \
-               'limit=25&offset=0&olang=fi' % (maybe_series_id)
-        series_url = urlparse.urljoin(url, path)
-        series_info = self.load_jsonp(series_url) or {}
-        data = series_info.get('data', [])
-        ids = (d.get('id') for d in data if d.get('id'))
-        playlist = [urlparse.urljoin(url, '/' + eid) for eid in ids]
+        program_list_re = '<ul class="program-list".*?>(.*?)</ul>'
+        episode_re = r'<a itemprop="url" href="([^">]+)"'
+
+        playlist = None
+        html = download_page(url)
+        if html and self.is_playlist_page(html):
+            listmatch = re.search(program_list_re, html, re.DOTALL)
+            if listmatch:
+                programlist = listmatch.group(1)
+                hrefs = (m.group(1) for m in
+                         re.finditer(episode_re, programlist))
+                playlist = [urlparse.urljoin(url, href) for href in hrefs]
 
         if debug:
             if playlist:
@@ -1089,13 +1108,18 @@ class Areena2014Downloader(AreenaUtils):
             else:
                 log('not a playlist')
 
-        if filters.latest_only:
-            playlist = playlist[:1]
-
         if not playlist:
             playlist = [url]
 
+        if filters.latest_only:
+            playlist = playlist[:1]
+
         return playlist
+
+    def is_playlist_page(self, html):
+        playlist_meta = '<meta property="og:type" content="video.tv_show">'
+        player_class = 'class="yle_areena_player"'
+        return playlist_meta in html or not player_class in html
 
     def process_single_episode(self, clipfunc, url, filters):
         clip = self.clip_for_url(url, filters)
@@ -1117,9 +1141,25 @@ class Areena2014Downloader(AreenaUtils):
 
         if debug:
             log('program data:')
-            log(str(program_info))
+            log(json.dumps(program_info))
 
-        return self.create_clip(program_info, pid, pageurl, filters)
+        unavailable = self.unavailable_clip(program_info, pageurl)
+        return unavailable or \
+          self.create_clip(program_info, pid, pageurl, filters)
+
+    def unavailable_clip(self, program_info, pageurl):
+        event = self.publish_event(program_info)
+        expired_timestamp = self.event_expired_timestamp(event)
+        if expired_timestamp:
+            return FailedClip(pageurl, 'The clip has expired on %s' %
+                              expired_timestamp)
+
+        future_timestamp = self.event_in_future_timestamp(event)
+        if future_timestamp:
+            return FailedClip(pageurl, 'The clip will be published at %s' %
+                              future_timestamp)
+
+        return None
 
     def program_info_url(self, program_id):
         return 'http://player.yle.fi/api/v1/programs.jsonp?' \
@@ -1132,14 +1172,16 @@ class Areena2014Downloader(AreenaUtils):
             return FailedClip(pageurl, 'Failed to parse media ID')
 
         proto = self.program_protocol(program_info)
-        media = self.yle_media_descriptor(media_id, program_id, proto)
-        if not media:
+        medias = self.yle_media_descriptor(media_id, program_id, proto)
+        if not medias:
             return FailedClip(pageurl, 'Failed to parse media object')
+
+        selected_media = self.select_media(medias, filters)
 
         return Clip(pageurl,
                     self.program_title(program_info),
-                    self.media_streamurl(media, pageurl, filters),
-                    self.media_subtitles(media))
+                    self.media_streamurl(selected_media, pageurl, filters),
+                    self.media_subtitles(selected_media))
 
     def yle_media_descriptor(self, media_id, program_id, protocol):
         media_jsonp_url = 'http://player.yle.fi/api/v1/media.jsonp?' \
@@ -1151,10 +1193,10 @@ class Areena2014Downloader(AreenaUtils):
 
         if debug and media:
             log('media:')
-            log(str(media))
+            log(json.dumps(media))
 
         return media
-    
+
     def program_id_from_url(self, url):
         parsed = urlparse.urlparse(url)
         return parsed.path.split('/')[-1]
@@ -1163,13 +1205,31 @@ class Areena2014Downloader(AreenaUtils):
         event = self.publish_event(program_info)
         return event.get('media', {}).get('id')
 
+    def event_expired_timestamp(self, event):
+        if event.get('temporalStatus') == 'in-past':
+            return event.get('endTime')
+        else:
+            return None
+
+    def event_in_future_timestamp(self, event):
+        if event.get('temporalStatus') == 'in-future':
+            return event.get('startTime')
+        else:
+            return None
+
     def program_title(self, program_info):
         program = program_info.get('data', {}).get('program', {})
-        title = self.localized_text(program.get('title')) or \
-                self.localized_text(program.get('itemTitle')) or \
+        titleObject = program.get('title')
+        itemTitleObject = program.get('itemTitle')
+        title = self.localized_text(titleObject) or \
+                self.localized_text(titleObject, 'sv') or \
+                self.localized_text(itemTitleObject) or \
+                self.localized_text(itemTitleObject, 'sv') or \
                 'areena'
 
-        promotionTitle = self.localized_text(program.get('promotionTitle'))
+        promoTitleObject = program.get('promotionTitle')
+        promotionTitle = self.localized_text(promoTitleObject) or \
+          self.localized_text(promoTitleObject, 'sv')
         if promotionTitle and not promotionTitle.startswith(title):
             title += ": " + promotionTitle
 
@@ -1194,11 +1254,19 @@ class Areena2014Downloader(AreenaUtils):
         events = program_info.get('data', {}) \
                              .get('program', {}) \
                              .get('publicationEvent', [])
+
+        has_current = any(self.publish_event_is_current(e) for e in events)
+        if has_current:
+            events = [e for e in events if self.publish_event_is_current(e)]
+
         with_media = [e for e in events if e.get('media')]
         if with_media:
             return with_media[0]
         else:
             return {}
+
+    def publish_event_is_current(self, event):
+        return event.get('temporalStatus') == 'currently'
 
     def localized_text(self, alternatives, language='fi'):
         if alternatives:
@@ -1206,37 +1274,69 @@ class Areena2014Downloader(AreenaUtils):
         else:
             return None
 
-    def media_streamurl(self, media, pageurl, filters):
+    def filter_by_subtitles(self, streams, filters):
+        if filters.hardsubs:
+            substreams = [s for s in streams if s.has_key('hardsubtitle')]
+        else:
+            substreams = [s for s in streams if not s.has_key('hardsubtitle')]
+
+        if filters.sublang == 'all':
+            filtered = substreams
+        else:
+            filtered = [s for s in substreams if s.get('lang') == filters.sublang]
+
+        return filtered or streams
+
+    def select_media(self, media,  filters):
         protocol = media.get('meta', {}).get('protocol') or 'HDS'
         mediaobj = media.get('data', {}).get('media', {}).get(protocol, [])
-        if mediaobj:
-            url = mediaobj[0].get('url')
+        medias = self.filter_by_subtitles(mediaobj, filters)
+
+        if medias:
+            return medias[0]
         else:
-            url = None
+            return {}
+
+    def media_streamurl(self, media, pageurl, filters):
+        url = media.get('url')
         if not url:
             return InvalidStreamUrl('No media URL')
-        
+
         decodedurl = self.areena_decrypt(url, self.AES_KEY)
         if not decodedurl:
             return InvalidStreamUrl('Decrypting media URL failed')
 
-        if protocol == 'HDS':
+        if media.get('protocol') == 'HDS':
             return Areena2014HDSStreamUrl(pageurl, decodedurl, filters, self.backend)
         else:
             return Areena2014RTMPStreamUrl(pageurl, decodedurl, filters)
 
     def media_subtitles(self, media):
-        hds = media.get('data', {}).get('media', {}).get('HDS', [])
-        if hds:
-            subs_json = hds[0].get('subtitles', [])
-        else:
-            subs_json = []
-        subtitles = (Subtitle(s.get('uri'), self.three_letter_language_code(s.get('lang'))) for s in subs_json)
-        return [s for s in subtitles if s.url]
+        subtitles = []
+        for s in media.get('subtitles', []):
+            uri = s.get('uri')
+            lang = self.language_code_from_subtitle_uri(uri) or \
+              self.three_letter_language_code(s.get('lang'), s.get('type'))
+            if uri:
+                subtitles.append(Subtitle(uri, lang))
+        return subtitles
 
-    def three_letter_language_code(self, lang):
-        language_map = {'fi': 'fin', 'sv': 'swe'}
-        return language_map.get(lang, lang)
+    def language_code_from_subtitle_uri(self, uri):
+        if uri.endswith('.srt'):
+            ext = uri[:-4].rsplit('.', 1)[-1]
+            if len(ext) <= 3:
+                return ext
+            else:
+                return None
+        else:
+            return None
+
+    def three_letter_language_code(self, lang, subtype):
+        if subtype == 'hearingimpaired':
+            return lang + 'h'
+        else:
+            language_map = {'fi': 'fin', 'sv': 'swe'}
+            return language_map.get(lang, lang)
 
     def load_jsonp(self, url):
         json_string = self.remove_jsonp_padding(download_page(url))
@@ -1253,7 +1353,7 @@ class Areena2014Downloader(AreenaUtils):
     def remove_jsonp_padding(self, jsonp):
         if not jsonp:
             return None
-        
+
         without_padding = re.sub(r'^[\w.]+\(|\);$','', jsonp)
         if without_padding[:1] != '{' or without_padding[-1:] != '}':
             return None
@@ -1280,7 +1380,66 @@ class Areena2014LiveTVDownloader(Areena2014Downloader):
         return title
 
 
-class Clip:
+class YleUutisetDownloader(Areena2014Downloader):
+    @staticmethod
+    def supported_protocols():
+        return Areena2014Downloader.supported_protocols()
+
+    def download_episodes(self, url, filters, extra_argv, destdir):
+        return self.delegate_to_areena_downloader(
+            'download_episodes', url, filters=filters, extra_argv=extra_argv,
+            destdir=destdir)
+
+    def print_urls(self, url, print_episode_url, filters):
+        return self.delegate_to_areena_downloader(
+            'print_urls', url, print_episode_url=print_episode_url,
+             filters=filters)
+
+    def pipe(self, url, filters):
+        return self.delegate_to_areena_downloader(
+            'pipe', url, filters=filters)
+
+    def print_titles(self, url, filters):
+        return self.delegate_to_areena_downloader(
+            'print_titles', url, filters=filters)
+
+    def delegate_to_areena_downloader(self, method_name, url, *args, **kwargs):
+        areena_urls = self.build_areena_urls(url)
+        if areena_urls:
+            log(u'Found areena URLs: ' + ', '.join(areena_urls))
+
+            overall_status = RD_SUCCESS
+            for url in areena_urls:
+                kwcopy = dict(kwargs)
+                kwcopy['url'] = url
+                method = getattr(super(YleUutisetDownloader, self), method_name)
+                res = method(*args, **kwcopy)
+                if res != RD_SUCCESS:
+                    overall_status = res
+
+            return overall_status
+        else:
+            log(u'No video stream found at ' + url)
+            return RD_FAILED
+
+    def build_areena_urls(self, url):
+        html = download_page(url)
+        if not html:
+            return None
+
+        player_re = r'<div class="media yle_areena_player[^>]*data-id="([0-9-]+)"[^>]*>'
+        dataids = re.findall(player_re, html)
+        return [self.id_to_areena_url(id) for id in dataids]
+
+    def id_to_areena_url(self, data_id):
+        if '-' in data_id:
+            areena_id = data_id
+        else:
+            areena_id = '1-' + data_id
+        return 'http://areena.yle.fi/' + areena_id
+
+
+class Clip(object):
     def __init__(self, pageurl, title, streamurl, subtitles):
         self.pageurl = pageurl
         self.title = title
@@ -1293,7 +1452,7 @@ class FailedClip(Clip):
         Clip.__init__(self, pageurl, None, InvalidStreamUrl(errormessage), None)
 
 
-class Subtitle:
+class Subtitle(object):
     def __init__(self, url, language):
         self.url = url
         self.language = language
@@ -1307,7 +1466,7 @@ class Subtitle:
 # AreenaNGDownloader.
 
 
-class AreenaLiveDownloader:
+class AreenaLiveDownloader(object):
     @staticmethod
     def supported_protocols():
         return ['rtmp']
@@ -1382,7 +1541,7 @@ class AreenaLiveStreamUrl(AreenaRTMPStreamUrl):
 ### Areena live radio ###
 
 
-class AreenaLiveRadioDownloader:
+class AreenaLiveRadioDownloader(object):
     @staticmethod
     def supported_protocols():
         return ['rtmp']
@@ -1455,7 +1614,7 @@ class AreenaLiveRadioStreamUrl(AreenaRTMPStreamUrl):
 class ElavaArkistoDownloader(Areena2014Downloader):
     @staticmethod
     def supported_protocols():
-        return ['hds']
+        return ['hds', 'rtmp']
 
     def get_playlist(self, url, filters):
         dataids = self.get_dataids(url)
@@ -1486,7 +1645,7 @@ class ElavaArkistoDownloader(Areena2014Downloader):
             return FailedClip(pageurl, 'Failed to download embeded media data')
 
         if debug:
-            log(str(mediaitem))
+            log(json.dumps(mediaitem))
 
         if mediaitem.get('status') == 404:
             return FailedClip(pageurl, mediaitem.get('message') or 'Failed with status 404')
@@ -1500,16 +1659,16 @@ class ElavaArkistoDownloader(Areena2014Downloader):
         else:
             mediakanta_id = '6-' + mediaitem['mediakantaId']
             media_id = '26-' + mediaitem['id']
-            media = self.yle_media_descriptor(mediakanta_id, media_id, 'HDS')
-            if not media:
+            proto = 'HDS' if self.backend.startswith('hds') else 'RTMPE'
+            medias = self.yle_media_descriptor(mediakanta_id, media_id, proto)
+            if not medias:
                 return FailedClip(pageurl, 'Failed to parse media object')
 
-            if debug:
-                log(str(media))
+            selected_media = self.select_media(medias, filters)
 
             return Clip(pageurl, title,
-                        self.media_streamurl(media, pageurl, filters),
-                        self.media_subtitles(media))
+                        self.media_streamurl(selected_media, pageurl, filters),
+                        self.media_subtitles(selected_media))
 
     def embed_url(self, dataid):
         if '-' in dataid:
@@ -1554,7 +1713,7 @@ class ArkivetDownloader(Areena2014Downloader):
 ### Downloader wrapper class that retries different protocols ###
 
 
-class RetryingDownloader:
+class RetryingDownloader(object):
     def __init__(self, wrapped_class, protocols):
         self.wrapped_class = wrapped_class
         acceptable = wrapped_class.supported_protocols()
@@ -1606,7 +1765,7 @@ class RetryingDownloader:
 ### Download a stream to a local file ###
 
 
-class BaseDownloader:
+class BaseDownloader(object):
     def __init__(self, stream, clip_title, destdir, extra_argv):
         self.stream = stream
         self.clip_title = clip_title or 'ylestream'
@@ -1628,7 +1787,7 @@ class BaseDownloader:
     def outputfile_from_clip_title(self, ext='.flv', resume=False):
         if self._cached_output_file:
             return self._cached_output_file
-        
+
         filename = self.sane_filename(self.clip_title) + ext
         if self.destdir:
             filename = os.path.join(self.destdir, filename)
@@ -1636,7 +1795,7 @@ class BaseDownloader:
             filename = self.next_available_filename(filename)
         self._cached_output_file = filename
         return filename
-        
+
     def next_available_filename(self, proposed):
         i = 1
         enc = sys.getfilesystemencoding()
@@ -1693,7 +1852,7 @@ class BaseDownloader:
 class ExternalDownloader(BaseDownloader):
     def save_stream(self):
         args = self.build_args()
-        outputfile = self.outputfile_from_args(args)
+        outputfile = self.outputfile_from_external_args(args)
         self.log_output_file(outputfile)
         retcode = self.external_downloader(args)
         if retcode == RD_SUCCESS:
@@ -1702,6 +1861,9 @@ class ExternalDownloader(BaseDownloader):
 
     def build_args(self):
         return []
+
+    def outputfile_from_external_args(self, args):
+        return self.outputfile_from_args(args)
 
     def external_downloader(self, args):
         """Start an external process such as rtmpdump with argument list args and
@@ -1819,6 +1981,20 @@ class HDSDump(ExternalDownloader):
         self.cleanup_cookies()
         return RD_SUCCESS
 
+    def outputfile_from_external_args(self, args_in):
+        if not args_in:
+            return None
+
+        try:
+            i = args_in.index('--outfile')
+        except ValueError:
+            i = -1
+
+        if i >= 0 and i+1 < len(args_in):
+            return args_in[i+1]
+        else:
+            return None
+
     def cleanup_cookies(self):
         try:
             os.remove('Cookies.txt')
@@ -1832,6 +2008,7 @@ class HDSDump(ExternalDownloader):
 class YoutubeDLHDSDump(BaseDownloader):
     def __init__(self, stream, clip_title, destdir, extra_argv, maxbitrate):
         BaseDownloader.__init__(self, stream, clip_title, destdir, extra_argv)
+        self.maxbitrate = maxbitrate
 
     def resume_supported(self):
         return True
@@ -1866,6 +2043,7 @@ class YoutubeDLHDSDump(BaseDownloader):
         ydl = youtube_dl.YoutubeDL(ydlopts)
         f4mdl = youtube_dl.downloader.F4mFD(ydl, dlopts)
         info = {'url': self.stream.to_url()}
+        info.update(self._bitrate_parameter())
         try:
             if not f4mdl.download(outputfile, info):
                 return RD_FAILED
@@ -1876,6 +2054,41 @@ class YoutubeDLHDSDump(BaseDownloader):
         if outputfile != '-':
             self.log_output_file(outputfile, True)
         return RD_SUCCESS
+
+    def _stream_bitrates(self):
+        manifest = download_page(self.stream.to_url())
+        if not manifest:
+            return []
+
+        try:
+            manifest_xml = xml.dom.minidom.parseString(manifest)
+        except Exception as exc:
+            log(unicode(exc.message, 'utf-8', 'ignore'))
+            return []
+
+        medias = manifest_xml.getElementsByTagName('media')
+        bitrates = (int_or_else(m.getAttribute('bitrate'), 0) for m in medias)
+        return [br for br in bitrates if br > 0]
+
+    def _bitrate_parameter(self):
+        bitrates = self._stream_bitrates()
+        if debug:
+            log(u'Available bitrates: %s, maxbitrate = %s' %
+                (bitrates, self.maxbitrate))
+
+        if not bitrates:
+            return {}
+
+        acceptable_bitrates = [br for br in bitrates if br <= self.maxbitrate]
+        if not acceptable_bitrates:
+            selected_bitrate = min(bitrates)
+        else:
+            selected_bitrate = max(acceptable_bitrates)
+
+        if debug:
+            log(u'Selected bitrate: %s' % selected_bitrate)
+
+        return {'tbr': selected_bitrate}
 
 
 ### Download a plain HTTP file ###
